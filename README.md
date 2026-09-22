@@ -38,6 +38,7 @@ Python does not read `.env` automatically, so pass it to uv:
 
 ```sh
 uv run --env-file .env choice.py
+uv run --env-file .env score.py
 ```
 
 Set `UV_ENV_FILE=.env` once and plain `uv run choice.py` picks it up for the rest of the
@@ -170,5 +171,6 @@ except TypeSafeAPIError as error:
 | File | Purpose |
 | --- | --- |
 | `choice.py` | Minimal single-`Choice` example |
+| `score.py` | Minimal single-`Score` example |
 | `pyproject.toml` | Project metadata and dependencies |
 | `uv.lock` | Pinned dependency versions |

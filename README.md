@@ -37,6 +37,7 @@ TYPESAFE_API_KEY=your_api_key_here
 Python does not read `.env` automatically, so pass it to uv:
 
 ```sh
+uv run --env-file .env noul.py
 uv run --env-file .env choice.py
 uv run --env-file .env score.py
 ```
@@ -48,100 +49,52 @@ shell session. Exporting the variable directly works too:
 export TYPESAFE_API_KEY="your_api_key_here"
 ```
 
-## Example
-
-`choice.py` asks a single `Choice` question about a support ticket:
-
-```python
-from typesafe_sdk import Choice, TypeSafeClient
-
-with TypeSafeClient() as client:
-    response = client.system_one(
-        state={"document": "I was charged twice. Please fix this ASAP."},
-        questions={
-            "category": Choice(
-                instructions="What is this ticket about?",
-                criteria={"billing": None, "technical": None, "other": None},
-            ),
-        },
-    )
-
-print(response.choices["category"].choice)
-```
-
 ## Question types
 
-You pass `system_one` a dict of your own labels mapped to question objects. Answers come
-back grouped by type on the response.
+You pass `system_one` a `state` dict holding the text and a `questions` dict of your own
+labels mapped to question objects. Answers come back grouped by type on the response. Each
+example file is annotated line by line — read those for the actual usage.
 
-| Type | Arguments | Criteria | Read the answer via |
-| --- | --- | --- | --- |
-| `Noul` | `instructions` | — (returns a value in `0..1`) | `response.nouls[label].noul` |
-| `Choice` | `instructions`, `criteria` | dict of option name → `None` | `response.choices[label].choice` |
-| `Score` | `instructions`, `criteria` | ordered list, low to high | `response.scores[label].score` |
+| Type | Arguments | Criteria | Read the answer via | Example |
+| --- | --- | --- | --- | --- |
+| `Noul` | `instructions` | — | `response.nouls[label].noul` | `noul.py` |
+| `Choice` | `instructions`, `criteria` | dict of option name → `None` | `response.choices[label].choice` | `choice.py` |
+| `Score` | `instructions`, `criteria` | ordered list, low to high | `response.scores[label].score` | `score.py` |
 
-All three in one call:
+Questions in one call run in parallel, so batching several barely moves latency.
 
-```python
-from typesafe_sdk import Choice, Noul, Score, TypeSafeClient
+### Interpreting a Noul
 
-with TypeSafeClient() as client:
-    response = client.system_one(
-        state={"document": "I was charged twice. Please fix this ASAP."},
-        questions={
-            "billing": Noul(instructions="Is this ticket about billing?"),
-            "tone": Choice(
-                instructions="What is the customer's tone?",
-                criteria={"calm": None, "frustrated": None, "angry": None},
-            ),
-            "urgency": Score(
-                instructions="How urgent is this ticket?",
-                criteria=["can wait", "this week", "today"],
-            ),
-        },
-    )
+A `Noul` answers a yes/no proposition and returns **the probability that the answer is
+yes** — the verdict and the certainty in one number. It is not a scale of the thing you
+asked about; `0.83` means "fairly confidently yes", not "83% severe". For graded levels,
+ask a `Score` instead.
 
-print(response.nouls["billing"].noul)
-print(response.choices["tone"].choice)
-print(response.scores["urgency"].score)
-```
+Threshold it according to your error costs: `0.5` when a yes and a no are equally cheap to
+handle, higher when a false yes is expensive, lower when missing a true yes hurts more.
+`noul.py` uses a three-way split and routes the ambiguous middle band to a human.
+
+### What is on an answer
+
+`ChoiceAnswer` and `ScoreAnswer` carry `.confidence` and `.probabilities` (the full
+distribution over your options); `ScoreAnswer` adds `.legend` for the rubric. `NoulAnswer`
+has only `.noul` — with two outcomes the single number already describes the whole
+distribution, so a separate confidence would be redundant. None of the three return
+reasoning text.
+
+Every response also carries `.model` and `.usage`.
 
 ## Async client
 
-`AsyncTypeSafeClient` mirrors the sync API:
-
-```python
-import asyncio
-
-from typesafe_sdk import AsyncTypeSafeClient, Noul
-
-
-async def main() -> None:
-    async with AsyncTypeSafeClient() as client:
-        response = await client.system_one(
-            state={"document": "I was charged twice. Please fix this ASAP."},
-            questions={"billing": Noul(instructions="Is this ticket about billing?")},
-        )
-    print(response.nouls["billing"].noul)
-
-
-asyncio.run(main())
-```
+`AsyncTypeSafeClient` mirrors the sync API: construct it with `async with`, and `await`
+the `system_one` call. Everything else is identical.
 
 ## Configuration
 
-Client constructor options: `api_key`, `base_url`, `model`, `retry`.
-
-```python
-from typesafe_sdk import RetryPolicy, TypeSafeClient
-
-client = TypeSafeClient(
-    model="jev",
-    retry=RetryPolicy(max_retries=3, backoff_max=0.2, timeout=1.0),
-)
-```
-
-List available models with `TypeSafeClient().models.list()`.
+Client constructor options: `api_key`, `base_url`, `model`, `retry`. Retries and timeouts
+come from a `RetryPolicy(max_retries=..., backoff_max=..., timeout=...)`, which you can
+set on the client or per call. The default model is `jev-latest`; list what's available
+with `TypeSafeClient().models.list()`.
 
 ### Environment variables
 
@@ -154,22 +107,17 @@ List available models with `TypeSafeClient().models.list()`.
 
 ## Errors
 
-Invalid API keys raise `TypeSafeError` at client creation, before any request. Request
-failures raise `TypeSafeAPIError`, which carries `.status` and `.request_id`:
-
-```python
-from typesafe_sdk import TypeSafeAPIError
-
-try:
-    ...
-except TypeSafeAPIError as error:
-    print(error.status, error.request_id)
-```
+Invalid API keys raise `TypeSafeError` at client creation, before any request is made.
+Request failures raise `TypeSafeAPIError`, which carries `.status` and `.request_id` —
+both worth logging when you report a problem. Subclasses cover the specific cases:
+`TypeSafeAuthenticationError`, `TypeSafeRateLimitError`, `TypeSafeAPITimeoutError`,
+`TypeSafeAPIConnectionError`, and others.
 
 ## Files
 
 | File | Purpose |
 | --- | --- |
+| `noul.py` | Minimal single-`Noul` example |
 | `choice.py` | Minimal single-`Choice` example |
 | `score.py` | Minimal single-`Score` example |
 | `pyproject.toml` | Project metadata and dependencies |
